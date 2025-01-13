@@ -47,14 +47,14 @@ data_summary <- data %>%
     home_owner_label = ifelse(home_owner == 1, "Homeowner", "Non-homeowner"),
     income_vs_expenses_label = case_when(
       income_vs_expenses == 1 ~ "Expenses > Income",
-      income_vs_expenses == 2 ~ "Expenses = Income",
-      income_vs_expenses == 3 ~ "Expenses < Income"
+      income_vs_expenses == 2 ~ "Expenses < Income",
+      income_vs_expenses == 3 ~ "Expenses = Income"
     )
   ) %>%
   group_by(home_owner_label, income_vs_expenses_label) %>%
   summarise(count = n(), .groups = "drop")
 
-# Crear la gráfica
+# Create the graphic
 ggplot(data_summary, aes(x = income_vs_expenses_label, y = count, fill = home_owner_label)) +
   geom_bar(stat = "identity", position = "stack") +
   labs(
@@ -71,78 +71,99 @@ ggplot(data_summary, aes(x = income_vs_expenses_label, y = count, fill = home_ow
 
 # Graphic 2 : Treemap of expenses by category
 library(treemapify)
+library(tidyr)
 
-gastos_cols <- c(
+# COP to USD in 2018 (1USD=3900COP)
+usd_conversion_rate <- 0.00034  
+
+# Prepare the data
+expenses_cols <- c(
   "food_expense", "clothing_expense", "water_expense", "electricity_expense",
   "gas_expense", "cellphone_expense", "domestic_service_expense",
   "recreation_expense", "health_expense", "internet_expense",
   "school_transport_expense"
 )
-gastos_data <- data %>%
-  select(all_of(gastos_cols)) %>%
-  summarise(across(everything(), sum, na.rm = TRUE)) %>%
-  pivot_longer(cols = everything(), names_to = "category", values_to = "amount")
 
-# Crear un treemap
-ggplot(gastos_data, aes(area = amount, fill = category, label = paste(category, "\n$", round(amount, 2)))) +
+expenses_data <- data %>%
+  # Seleccionar solo las columnas de gastos
+  select(all_of(expenses_cols)) %>%
+  # Filtrar valores NA o negativos
+  filter(if_all(all_of(expenses_cols), ~ !is.na(.) & . > 0)) %>%
+  # Calcular total y promedio para cada categoría
+  summarise(across(everything(), list(
+    total = ~sum(.x, na.rm = TRUE),
+    avg = ~mean(.x, na.rm = TRUE)
+  ))) %>%
+  # Transformar a formato largo
+  pivot_longer(cols = everything(), names_to = "category_stat", values_to = "amount") %>%
+  # Separar nombre de la categoría y tipo de estadística (total o avg)
+  separate(category_stat, into = c("category", "stat"), sep = "_(?=[^_]+$)") %>%
+  # Volver a formato ancho
+  pivot_wider(names_from = "stat", values_from = "amount") %>%
+  # Convertir total y promedio a USD y eliminar "_expense"
+  mutate(
+    category = gsub("_expense", "", category),  # Remove "_expense" suffix
+    total_usd = round(total * usd_conversion_rate),   # Convert total to USD
+    avg_usd = round(avg * usd_conversion_rate)        # Convert average to USD
+  )
+
+# Create treemap
+ggplot(expenses_data, aes(
+  area = total_usd,
+  fill = category,
+  label = paste0(
+    category, "\n",
+    "Total: $", round(total_usd, 2), "\n",
+    "Avg: $", round(avg_usd, 2)
+  )
+)) +
   geom_treemap() +
   geom_treemap_text(colour = "white", place = "centre", grow = TRUE) +
   labs(
-    title = "Distribución de los gastos por categoría",
-    fill = "Categorías"
+    title = "Expenses by Category (in USD)",
+    fill = "Category"
   ) +
   theme_minimal()
 
 # Graphic 3: Boxplot expenses by group of income vs expenses
-# Cargar librerías
-library(ggplot2)
-library(dplyr)
 
-# Definir las columnas de gasto
-gastos_cols <- c(
-  "food_expense", "clothing_expense", "water_expense", "electricity_expense",
-  "gas_expense", "cellphone_expense", "domestic_service_expense",
-  "recreation_expense", "health_expense", "internet_expense",
-  "school_transport_expense", "pension_expense"
-)
-
-# Crear el dataset con las columnas de gastos y income_vs_expenses
-gastos_data <- data %>%
-  select(all_of(gastos_cols), income_vs_expenses) %>%
+# Create dataset with expense column and income_vs_expenses
+expenses_data <- data %>%
+  select(all_of(expenses_cols), income_vs_expenses) %>%
   mutate(income_vs_expenses_label = case_when(
     income_vs_expenses == 1 ~ "Expenses > Income",
-    income_vs_expenses == 2 ~ "Expenses = Income",
-    income_vs_expenses == 3 ~ "Expenses < Income"
+    income_vs_expenses == 2 ~ "Expenses < Income",
+    income_vs_expenses == 3 ~ "Expenses = Income"
   ))
 
-# Limpiar los datos (eliminar valores NA o gastos negativos)
-gastos_clean <- gastos_data %>%
-  filter(if_all(all_of(gastos_cols), ~ !is.na(.) & . > 0))  # Filtrar NA y valores negativos
+# Clean data (delete NA or negative values)
+expenses_clean <- expenses_data %>%
+  filter(if_all(all_of(expenses_cols), ~ !is.na(.) & . > 0))  # Filtrar NA y valores negativos
 
-# Convertir los montos de COP a USD
-exchange_rate <- 4500  # 1 USD = 4500 COP
-gastos_clean[gastos_cols] <- gastos_clean[gastos_cols] / exchange_rate  # Convertir todas las columnas de gasto
+# Convert COP to USD
+expenses_clean[expenses_cols] <- expenses_clean[expenses_cols] * usd_conversion_rate  
 
-# Crear un boxplot para cada categoría de gasto, diferenciando por income_vs_expenses_label
-gastos_clean %>%
-  pivot_longer(cols = all_of(gastos_cols), names_to = "category", values_to = "amount") %>%
-  ggplot(aes(x = category, y = amount, fill = income_vs_expenses_label)) +
+expenses_long <- expenses_clean %>%
+  pivot_longer(cols = all_of(expenses_cols), names_to = "category", values_to = "amount") %>%
+  mutate(category = gsub("_expense", "", category))  # Remove "_expense" from category names
+
+# Create boxplot
+ggplot(expenses_long, aes(x = category, y = amount, fill = income_vs_expenses_label)) +
   geom_boxplot() +
   ylim(0, 600) +
   labs(
-    title = "Distribución de los Gastos por Categoría y Estado de Ingresos vs Gastos",
-    x = "Categoría de Gasto",
-    y = "Monto de Gasto (USD)",
-    fill = "Estado de Ingresos vs Gastos"
+    title = "Expenses by Category",
+    x = "Expense Category",
+    y = "Expense Amount (USD)",
+    fill = "Expenses vs Income"
   ) +
-  scale_fill_manual(values = c("skyblue", "orange", "red")) +  # Colores personalizados
+  scale_fill_manual(values = c("skyblue", "orange", "red")) + 
   theme_minimal() +
   theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotar las etiquetas de las categorías
-    legend.title = element_text(size = 10),  # Mejorar la legibilidad del título de la leyenda
-    legend.text = element_text(size = 8)  # Mejorar la legibilidad de los textos de la leyenda
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate labels
+    legend.title = element_text(size = 10), 
+    legend.text = element_text(size = 8)  
   )
-
 
 
 
